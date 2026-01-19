@@ -132,6 +132,7 @@ GameLogic::slideAndMergeRow(std::array<Tile, 4> &row) {
     }
   }
 
+  // Phase 2: Merge
   std::vector<Tile> mergedResult;
   mergedResult.reserve(4);
   int writeIdx = 0;

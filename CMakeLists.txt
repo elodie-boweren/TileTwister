@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE) # Force all dependencies to be static
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # --- Dependencies ---
 include(FetchContent)
@@ -13,6 +14,8 @@ include(FetchContent)
 FetchContent_Declare(
   googletest
   URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  TLS_VERIFY FALSE
 )
 # For Windows: Prevent GTest from overriding our compiler/linker options
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
@@ -34,7 +37,9 @@ if(NOT SDL2_FOUND)
   FetchContent_Declare(
     SDL2
     URL https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.zip
-  )
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    TLS_VERIFY FALSE
+      )
   FetchContent_MakeAvailable(SDL2)
   # SDL2 CMake creates 'SDL2::SDL2-static' or 'SDL2::SDL2' depending on settings
   if(TARGET SDL2-static)
@@ -42,9 +47,51 @@ if(NOT SDL2_FOUND)
   elseif(TARGET SDL2)
     add_library(SDL2::SDL2 ALIAS SDL2)
   endif()
+  # If SDL2 provides the SDL2main target (required on some Windows setups), alias it too
+  if(TARGET SDL2main)
+    add_library(SDL2::SDL2main ALIAS SDL2main)
+  endif()
 endif()
 
 # 3. Freetype (Required for SDL2_ttf)
+# Try to automatically locate MSYS2 / MinGW installations on Windows and
+# predefine variables that FindFreetype will use. This helps CMake find
+# freetype when MSYS2 provided libraries are available (e.g. C:/msys64/ucrt64).
+if(WIN32)
+  set(_msys_candidates
+    "C:/msys64/ucrt64"
+    "C:/msys64/mingw64"
+    "C:/msys64/mingw32"
+  )
+  foreach(_p IN LISTS _msys_candidates)
+    if(EXISTS "${_p}")
+      # Look for ft2build.h inside common include locations
+      find_path(_ft_inc NAMES ft2build.h PATHS
+        ${_p}/include
+        ${_p}/include/freetype2
+        ${_p}/include/freetype2/freetype
+        NO_DEFAULT_PATH
+      )
+      if(_ft_inc)
+        # Configure variables that FindFreetype and other modules expect
+        set(FREETYPE_INCLUDE_DIRS "${_ft_inc}" CACHE PATH "Freetype include dir (auto)" FORCE)
+        # Try common library names/locations
+        find_library(_ft_lib NAMES freetype libfreetype-6 freetype6 PATHS
+          ${_p}/lib
+          ${_p}/lib64
+          NO_DEFAULT_PATH
+        )
+        if(_ft_lib)
+          set(FREETYPE_LIBRARY "${_ft_lib}" CACHE FILEPATH "Freetype library (auto)" FORCE)
+        endif()
+        # Add prefix to CMAKE_PREFIX_PATH to help find other deps (harfbuzz, etc.)
+        list(APPEND CMAKE_PREFIX_PATH "${_p}")
+        break()
+      endif()
+    endif()
+  endforeach()
+endif()
+
 find_package(Freetype QUIET)
 if(NOT Freetype_FOUND)
   message(STATUS "Freetype not found, fetching from source...")
@@ -52,6 +99,8 @@ if(NOT Freetype_FOUND)
       Freetype
       GIT_REPOSITORY https://github.com/freetype/freetype.git
       GIT_TAG VER-2-13-2
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    TLS_VERIFY FALSE
   )
   FetchContent_MakeAvailable(Freetype)
   if(TARGET freetype)
@@ -70,6 +119,8 @@ if(NOT SDL2_ttf_FOUND)
     SDL2_ttf
     GIT_REPOSITORY https://github.com/libsdl-org/SDL_ttf.git
     GIT_TAG release-2.22.0
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    TLS_VERIFY FALSE
   )
   FetchContent_MakeAvailable(SDL2_ttf)
 
@@ -88,6 +139,8 @@ FetchContent_Declare(
   SDL2_mixer
   GIT_REPOSITORY https://github.com/libsdl-org/SDL_mixer.git
   GIT_TAG        release-2.6.3
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  TLS_VERIFY FALSE
 )
 set(SDL2MIXER_VENDORED OFF CACHE BOOL "" FORCE)
 set(SDL2MIXER_OPUS OFF CACHE BOOL "" FORCE)     # Disable extra formats for speed
@@ -136,6 +189,13 @@ add_executable(TileTwister
 target_include_directories(TileTwister PUBLIC src)
 target_link_libraries(TileTwister PRIVATE TileTwister_Core TileTwister_Engine)
 
+# On Windows/MinGW we must link SDL2's SDL2main implementation into the executable
+# to provide the WinMain entry point expected by the Windows subsystem.
+# Make sure the assets folder is also copied to the build output directory
+if(TARGET SDL2::SDL2main)
+  target_link_libraries(TileTwister PRIVATE SDL2::SDL2main)
+endif()
+
 # --- Testing ---
 enable_testing()
 add_executable(TileTwister_Tests 
@@ -156,5 +216,11 @@ target_include_directories(IntegrationTests PRIVATE src src/game)
 target_link_libraries(IntegrationTests PRIVATE GTest::gtest_main TileTwister_Core)
 
 include(GoogleTest)
-gtest_discover_tests(TileTwister_Tests)
-gtest_discover_tests(IntegrationTests)
+gtest_discover_tests(TileTwister_Tests
+ DISCOVERY_TIMEOUT 60
+    NO_PRETTY_TYPES
+    NO_PRETTY_VALUES)
+gtest_discover_tests(IntegrationTests
+DISCOVERY_TIMEOUT 60
+    NO_PRETTY_TYPES
+    NO_PRETTY_VALUES)

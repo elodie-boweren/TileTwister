@@ -10,6 +10,8 @@
 #include "AnimationManager.hpp" // Added
 #include "InputManager.hpp"     // Added
 #include <set>                  // Added
+#include <memory>
+#include <vector>
 
 namespace Game {
 
